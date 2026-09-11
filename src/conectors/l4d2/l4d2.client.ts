@@ -1,8 +1,13 @@
 import { Rcon } from "rcon-client";
 import type { InfectedType } from "./infected.type.js";
 
+/** El efecto no llegó a ocurrir porque la partida no estaba activa. */
+export class EffectSkipped extends Error { }
+
 export class L4D2Client {
     private rcon?: Rcon;
+
+    private connecting?: Promise<void>;
 
     constructor(
         private readonly host: string,
@@ -10,68 +15,138 @@ export class L4D2Client {
         private readonly password: string,
     ) { }
 
-    async connect() {
+    async connect(): Promise<void> {
         if (this.rcon) {
             return;
         }
 
-        this.rcon = await Rcon.connect({
+        // ponytail: one in-flight connect shared by concurrent callers
+        this.connecting ??= this
+            .openConnection()
+            .finally(() => {
+                this.connecting = undefined;
+            });
+
+        return this.connecting;
+    }
+
+    private async openConnection(): Promise<void> {
+        const rcon = await Rcon.connect({
             host: this.host,
             port: this.port,
             password: this.password,
         });
 
+        // The server drops RCON on changelevel, restart or crash.
+        // Clearing the reference makes the next command reconnect.
+        rcon.on("end", () => {
+            this.handleDrop(rcon, "conexión cerrada por el servidor");
+        });
+
+        rcon.on("error", (error) => {
+            this.handleDrop(rcon, `error de socket: ${error}`);
+        });
+
+        this.rcon = rcon;
+
         console.log(`[L4D2] Conectado a ${this.host}:${this.port}`);
     }
 
-    async disconnect() {
-        if (!this.rcon) {
+    private handleDrop(rcon: Rcon, reason: string): void {
+        if (this.rcon !== rcon) {
             return;
         }
 
-        this.rcon.end();
         this.rcon = undefined;
+
+        console.warn(
+            `[L4D2] Conexión perdida (${reason}). Se reconectará al próximo comando.`,
+        );
+
+        void rcon.end().catch(() => { });
+    }
+
+    async disconnect(): Promise<void> {
+        const rcon = this.rcon;
+
+        if (!rcon) {
+            return;
+        }
+
+        this.rcon = undefined;
+
+        await rcon.end().catch(() => { });
 
         console.log("[L4D2] Desconectado");
     }
 
-    async sendCommand(command: string) {
-        if (!this.rcon) {
+    async sendCommand(command: string): Promise<string> {
+        await this.connect();
+
+        const rcon = this.rcon;
+
+        if (!rcon) {
             throw new Error("No hay conexión RCON activa");
         }
 
-        return this.rcon.send(command);
+        try {
+            return await rcon.send(command);
+        } catch (error) {
+            this.handleDrop(rcon, "fallo al enviar comando");
+
+            throw error;
+        }
     }
 
-    async spawnInfected(
-        type: InfectedType,
-        amount = 1,
+    async runEffect(
+        effect: string,
+        intensity: number,
+        source?: { user: string; gift?: string },
     ): Promise<string> {
-        if (amount < 1) {
+        if (intensity < 1) {
             throw new Error(
-                "La cantidad debe ser mayor a 0",
+                "La intensidad debe ser mayor a 0",
             );
         }
 
-        const command =
-            `sm_spawn_infected ${type} ${amount}`;
+        const args = [
+            effect,
+            String(intensity),
+        ];
 
-        console.log(
-            `[L4D2] Ejecutando: ${command}`,
-        );
+        if (source) {
+            args.push(quoteArg(source.user));
+            args.push(quoteArg(source.gift ?? ""));
+        }
 
-        const response = await this.sendCommand(
-            command,
-        );
+        const command = `sm_interactive ${args.join(" ")}`;
 
-        if (
-            response.includes(
-                "[Interactive][ERROR]",
-            )
-        ) {
+        console.log(`[L4D2] Ejecutando: ${command}`);
+
+        const response = await this.sendCommand(command);
+
+        // El server rechaza efectos fuera de partida: no es un fallo, no se
+        // reintenta y no consume el cooldown.
+        if (response.includes("[Interactive][SKIP]")) {
+            throw new EffectSkipped(response.trim());
+        }
+
+        if (response.includes("[Interactive][ERROR]")) {
             throw new Error(response.trim());
         }
 
         return response;
     }
+}
+
+// Nicknames and gift names come from TikTok and end up inside an RCON
+// command line, where a quote or a semicolon would run arbitrary commands.
+// Only safe characters survive.
+export function quoteArg(value: string): string {
+    const safe = value
+        .replace(/[^\p{L}\p{N} ._-]/gu, "")
+        .trim()
+        .slice(0, 24);
+
+    return `"${safe}"`;
 }

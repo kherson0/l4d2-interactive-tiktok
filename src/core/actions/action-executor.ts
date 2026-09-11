@@ -1,6 +1,9 @@
-
 import { L4D2Client } from "../../conectors/l4d2/l4d2.client.js";
-import type { InteractiveAction } from "./interactive-action.model.js";
+
+import {
+    toEffect,
+    type InteractiveAction,
+} from "./interactive-action.model.js";
 
 export class ActionExecutor {
     constructor(
@@ -13,13 +16,12 @@ export class ActionExecutor {
             action,
         );
 
-        switch (action.type) {
-            case "spawnInfected":
-                await this.l4d2.spawnInfected(
-                    action.infected,
-                    action.amount,
-                );
-                break;
-        }
+        const { effect, intensity } = toEffect(action);
+
+        await this.l4d2.runEffect(
+            effect,
+            intensity,
+            action.source,
+        );
     }
 }

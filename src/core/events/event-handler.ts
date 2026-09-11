@@ -1,6 +1,7 @@
 import type { ActionQueue } from "../actions/action-queue.js";
 import type { InteractiveAction } from "../actions/interactive-action.model.js";
 import { giftRules } from "../rules/gift-rules.js";
+import type { GiftRule } from "../rules/gift-rule.model.js";
 
 import type {
     GiftEvent,
@@ -46,14 +47,9 @@ export class EventHandler {
             return;
         }
 
-        const action = this.createGiftAction(
-            rule.action,
-            event,
-        );
+        const action = this.createGiftAction(rule, event);
 
-        const accepted = this.actionQueue.enqueue(
-            action,
-        );
+        const accepted = this.actionQueue.enqueue(action);
 
         if (!accepted) {
             console.warn(
@@ -63,24 +59,70 @@ export class EventHandler {
     }
 
     private createGiftAction(
-        action: InteractiveAction,
+        rule: GiftRule,
         event: GiftEvent,
     ): InteractiveAction {
+        const action = rule.action;
+
+        const source = {
+            user: event.user,
+            gift: event.gift,
+            giftAmount: event.amount,
+        };
+
+        // The viewer decides how many gifts to send, so the multiplier is
+        // untrusted input: every effect clamps it.
         switch (action.type) {
             case "spawnInfected":
                 return {
                     ...action,
-
-                    amount:
-                        action.amount *
+                    amount: this.scale(
+                        action.amount,
                         event.amount,
+                        rule.maxPerEvent,
+                    ),
+                    source,
+                };
 
-                    source: {
-                        user: event.user,
-                        gift: event.gift,
-                        giftAmount: event.amount,
-                    },
+            case "heal":
+                return {
+                    ...action,
+                    amount: this.scale(
+                        action.amount,
+                        event.amount,
+                        rule.maxPerEvent,
+                    ),
+                    source,
+                };
+
+            case "ignite":
+                return {
+                    ...action,
+                    seconds: this.scale(
+                        action.seconds,
+                        event.amount,
+                        rule.maxPerEvent,
+                    ),
+                    source,
                 };
         }
+    }
+
+    private scale(
+        base: number,
+        giftAmount: number,
+        max?: number,
+    ): number {
+        const total = base * giftAmount;
+
+        if (max === undefined || total <= max) {
+            return total;
+        }
+
+        console.warn(
+            `[EventHandler] Cantidad ${total} recortada al máximo ${max}`,
+        );
+
+        return max;
     }
 }

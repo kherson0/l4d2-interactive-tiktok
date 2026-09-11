@@ -14,7 +14,7 @@ export const env = {
     l4d2: {
         host:
             process.env.L4D2_RCON_HOST ??
-            "172.31.240.1",
+            "127.0.0.1",
 
         port: Number(
             process.env.L4D2_RCON_PORT ??
@@ -35,6 +35,16 @@ export const env = {
         maxSize: Number(
             process.env.ACTION_QUEUE_MAX_SIZE ??
             100,
+        ),
+
+        retryAttempts: Number(
+            process.env.ACTION_QUEUE_RETRY_ATTEMPTS ??
+            3,
+        ),
+
+        retryDelayMs: Number(
+            process.env.ACTION_QUEUE_RETRY_DELAY_MS ??
+            2000,
         ),
     },
 };
